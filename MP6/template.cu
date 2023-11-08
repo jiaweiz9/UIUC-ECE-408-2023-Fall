@@ -14,7 +14,7 @@
     if (err != cudaSuccess) {                                             \
       wbLog(ERROR, "Failed to run stmt ", #stmt);                         \
       wbLog(ERROR, "Got CUDA error ...  ", cudaGetErrorString(err));      \
-      return -1;                                                          \
+      return -1;                                         \
     }                                                                     \
   } while (0)
 
