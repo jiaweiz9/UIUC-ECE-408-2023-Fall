@@ -1,13 +1,15 @@
+//===================matrix-unroll.cu===========
 #include <cmath>
 #include <iostream>
 #include "gpu-new-forward.h"
 
-#define TILE_WIDTH 8
-
+#define TILE_WIDTH 16
+#define TILE_WIDTH_2 16
 #define M_max 16
 #define C_max 6
 #define K_max 5
 #define S_max 2
+
 #define wbCheck(stmt)                                                     \
   do {                                                                    \
     cudaError_t err = stmt;                                               \
@@ -17,44 +19,13 @@
     }                                                                     \
   } while (0)
 
-// __constant__ float Mc[8192];
+__constant__ float Mc[M_max * C_max * K_max * K_max];
 
-__global__ void conv_forward_kernel(float *output, const float *input, const float *mask, const int B, const int M, const int C, const int H, const int W, const int K, const int S)
+__global__ void unroll(const int B, const int C, const int H, const int W, const int K, const int S, const float* X, float* X_unroll) 
 {
-    /*
-    Modify this function to implement the forward pass described in Chapter 16.
-    We have added an additional dimension to the tensors to support an entire mini-batch
-    The goal here is to be correct AND fast.
+    int H_out = (H - K) / S + 1; // calculate H_out, W_out
+    int W_out = (W - K) / S + 1;
 
-    Function paramter definitions:
-    output - output
-    input - input
-    mask - convolution kernel
-    B - batch_size (number of images in x)
-    M - number of output feature maps
-    C - number of input feature maps
-    H - input height dimension
-    W - input width dimension
-    K - kernel height and width (K x K)
-    S - stride step length
-    */
-
-    const int H_out = (H - K)/S + 1;
-    const int W_out = (W - K)/S + 1;
-    __shared__ float reduction[8 * TILE_WIDTH * TILE_WIDTH];
-    // (void)H_out; // silence declared but never referenced warning. remove this line when you start working
-    // (void)W_out; // silence declared but never referenced warning. remove this line when you start working
-
-    // We have some nice #defs for you below to simplify indexing. Feel free to use them, or create your own.
-    // An example use of these macros:
-    // float a = in_4d(0,0,0,0)
-    // out_4d(0,0,0,0) = a
-
-    #define out_4d(i3, i2, i1, i0) output[(i3) * (M * H_out * W_out) + (i2) * (H_out * W_out) + (i1) * (W_out) + i0]
-    #define in_4d(i3, i2, i1, i0) input[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
-    #define mask_4d(i3, i2, i1, i0) mask[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]
-
-    // Insert your GPU convolution kernel code here
     int num_of_block_w = 0;
     if(W_out % TILE_WIDTH == 0)
         num_of_block_w = W_out / TILE_WIDTH;
@@ -62,42 +33,70 @@ __global__ void conv_forward_kernel(float *output, const float *input, const flo
         num_of_block_w = W_out / TILE_WIDTH + 1;
     // int num_of_block_h = ceil(H_out / TILE_WIDTH);
     int b = blockIdx.x;
-    int m = blockIdx.y;
-    int c = threadIdx.z;
-    int h = (blockIdx.z / num_of_block_w) * TILE_WIDTH + threadIdx.y;
-    int w = (blockIdx.z % num_of_block_w) * TILE_WIDTH + threadIdx.x;
-    
-    
-    // for(int b = 0; b < B; b++) {
-    if(h < H_out && w < W_out) {
-        float acc = 0.0f;
-        // for (int c = 0; c < C; c++) { // sum over all input channels
-            for (int p = 0; p < K; p++) // loop over KxK filter
-                for (int q = 0; q < K; q++)
-                        acc += in_4d(b, c, h * S + p, w * S + q) * mask_4d(m, c, p, q);
-        // }
-        // atomicAdd(&out_4d(b, m, h, w), acc);
-        reduction[(threadIdx.y * TILE_WIDTH + threadIdx.x) * 8 + c] = acc;
-    
-    // }
-        int stride = 1;
-        int base = (threadIdx.y * TILE_WIDTH + threadIdx.x) * 8;
-        while(stride < 8)
-        {
-            __syncthreads();
-            if(c % (2 * stride) == 0 && c + stride < C)
-            {
-                reduction[base + c] += reduction[base + c + stride];
-            }
-            stride = stride * 2;
+    // int m = blockIdx.y;
+    int th = (blockIdx.y / num_of_block_w) * TILE_WIDTH + threadIdx.y;
+    int tw = (blockIdx.y % num_of_block_w) * TILE_WIDTH + threadIdx.x;
+
+    int col = H_out * W_out;
+    // #define X_in(i3, i2, i1, i0) X[(i3) * (X * H * W) + (i2) * (H * W) + (i1) * (W) + i0]
+    // #define X_out(i2, i1, i0) X_unroll[(i2) * (K * K * C * ((H - K) / S + 1) * ((H - K) / S + 1)) + (i1) * (K * K * C) + i0]
+
+    // for (int b = 0; b < B; ++b) // for each image
+    if(tw < W_out && th < H_out)
+    {
+        for (int c = 0; c < C; c++) { // for each input channel
+            int w_base = c * (K * K); // per-channel offset for smallest X_unroll index
+            for (int p = 0; p < K; p++) // for each element of KxK filter (two loops)
+                for (int q = 0; q < K; q++) { 
+                    int h_unroll = w_base + p * K + q; // data needed by one thread
+                    int w_unroll = th * W_out + tw; // smallest index--across threads (output values)
+                    X_unroll[b * K * K * C * col + h_unroll * col + w_unroll] = X[b * C * H * W + c * (H * W) + (th * S + p) * (W) + tw * S + q]; // copy input pixels
+                }
+                    // }
+        }
+    }
+}
+
+__global__ void matrixMultiplyShared(const float *A, float *B, float *C,
+                                     int numARows, int numAColumns,
+                                     int numBRows, int numBColumns,
+                                     int numCRows, int numCColumns) {
+    //@@ Insert code to implement matrix multiplication here
+    //@@ You have to use shared memory for this MP
+    __shared__ float subTileA[TILE_WIDTH][TILE_WIDTH];
+    __shared__ float subTileB[TILE_WIDTH][TILE_WIDTH];
+    int batch = blockIdx.z;
+    int block_x = blockIdx.x; 
+    int block_y = blockIdx.y;
+    int thread_x = threadIdx.x;
+    int thread_y = threadIdx.y;
+    int row = block_y * TILE_WIDTH + thread_y;
+    int col = block_x * TILE_WIDTH + thread_x;
+    float pValue = 0;
+    for(int q = 0; q < ceil((float)numAColumns / TILE_WIDTH); q++) {
+        if(q * TILE_WIDTH + thread_x < numAColumns && row < numARows) {
+            subTileA[thread_y][thread_x] = A[row * numAColumns + q * TILE_WIDTH + thread_x];
+        }
+        else {
+            subTileA[thread_y][thread_x] = 0;
+        }
+        if(q * TILE_WIDTH + thread_y < numBRows && col < numBColumns) {
+            subTileB[thread_y][thread_x] = B[(numBRows * numBColumns) * batch + (q * TILE_WIDTH + thread_y) * numBColumns + col];
+        }
+        else {
+            subTileB[thread_y][thread_x] = 0;
         }
         __syncthreads();
-        if(c == 0)
-            out_4d(b, m, h, w) = reduction[(threadIdx.y * TILE_WIDTH + threadIdx.x) * 8];
+
+        for(int k = 0; k < TILE_WIDTH; k++) {
+            // pValue += Mc[row * numAColumns + q * TILE_WIDTH + k] * subTileB[k][thread_x];
+            pValue += subTileA[thread_y][k] * subTileB[k][thread_x];
+        }
+        __syncthreads();
     }
-    #undef out_4d
-    #undef in_4d
-    #undef mask_4d
+    if(row < numCRows && col < numCColumns) {
+        C[(numCRows * numCColumns) * batch + row * numCColumns + col] = pValue;
+    }
 }
 
 __host__ void GPUInterface::conv_forward_gpu_prolog(const float *host_output, const float *host_input, const float *host_mask, float **device_output_ptr, float **device_input_ptr, float **device_mask_ptr, const int B, const int M, const int C, const int H, const int W, const int K, const int S)
@@ -150,7 +149,10 @@ __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *
     int num_of_block_w = ceil((float)output_w / TILE_WIDTH);
     int num_of_block_h = ceil((float)output_h / TILE_WIDTH);
     int num_of_block = num_of_block_w * num_of_block_h;
-
+    int unrolled_col = output_h * output_w;
+    
+    float* unrolled_input;
+    cudaMalloc((void **)&unrolled_input, B * unrolled_col * C * K * K * sizeof(float));
     
     // wbLog(TRACE, "The number of blocks in width is ", num_of_block_w);
     // wbLog(TRACE, "The number of blocks in height is ", num_of_block_h);
@@ -158,11 +160,17 @@ __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *
     std::cout<<"num of block h "<<num_of_block_h<<std::endl;
 
     // int shared_width = (TILE_WIDTH - 1) * S + K;
-    dim3 dimBlock(TILE_WIDTH, TILE_WIDTH, C);
-    dim3 dimGrid(B, M, num_of_block);
+    dim3 dimBlock(TILE_WIDTH, TILE_WIDTH, 1);
+    dim3 dimGrid(B, num_of_block, 1);
     // conv_with_constant_mask<<<dimGrid, dimBlock>>>(device_output, device_input, B, M, C, H, W, K, S);
-    conv_forward_kernel<<<dimGrid, dimBlock>>>(device_output, device_input, device_mask, B, M, C, H, W, K, S);
-    std::cout<<"tiled shared memory"<<std::endl;
+    unroll<<<dimGrid, dimBlock>>>(B, C, H, W, K, S, device_input, unrolled_input);
+
+    int mat_block_w = ceil((float)unrolled_col / TILE_WIDTH_2);
+    int mat_block_h = ceil((float)M / TILE_WIDTH_2);
+    dim3 dimGrid2(mat_block_w, mat_block_h, B);
+    dim3 dimBlock2(TILE_WIDTH_2, TILE_WIDTH_2, 1);
+    matrixMultiplyShared<<<dimGrid2, dimBlock2>>>(device_mask, unrolled_input, device_output, M, C * K * K, C * K * K, unrolled_col, M, unrolled_col);
+    // std::cout<<"tiled shared memory"<<std::endl;
     cudaError_t error = cudaGetLastError();
     if(error != cudaSuccess)
     {

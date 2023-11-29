@@ -17,7 +17,7 @@
     }                                                                     \
   } while (0)
 
-// __constant__ float Mc[8192];
+__constant__ float Mc[M_max * C_max * K_max * K_max];
 
 __global__ void conv_forward_kernel(float *output, const float *input, const float *mask, const int B, const int M, const int C, const int H, const int W, const int K, const int S)
 {
@@ -41,7 +41,6 @@ __global__ void conv_forward_kernel(float *output, const float *input, const flo
 
     const int H_out = (H - K)/S + 1;
     const int W_out = (W - K)/S + 1;
-    __shared__ float reduction[8 * TILE_WIDTH * TILE_WIDTH];
     // (void)H_out; // silence declared but never referenced warning. remove this line when you start working
     // (void)W_out; // silence declared but never referenced warning. remove this line when you start working
 
@@ -76,25 +75,9 @@ __global__ void conv_forward_kernel(float *output, const float *input, const flo
                 for (int q = 0; q < K; q++)
                         acc += in_4d(b, c, h * S + p, w * S + q) * mask_4d(m, c, p, q);
         // }
-        // atomicAdd(&out_4d(b, m, h, w), acc);
-        reduction[(threadIdx.y * TILE_WIDTH + threadIdx.x) * 8 + c] = acc;
-    
-    // }
-        int stride = 1;
-        int base = (threadIdx.y * TILE_WIDTH + threadIdx.x) * 8;
-        while(stride < 8)
-        {
-            __syncthreads();
-            if(c % (2 * stride) == 0 && c + stride < C)
-            {
-                reduction[base + c] += reduction[base + c + stride];
-            }
-            stride = stride * 2;
-        }
-        __syncthreads();
-        if(c == 0)
-            out_4d(b, m, h, w) = reduction[(threadIdx.y * TILE_WIDTH + threadIdx.x) * 8];
+        atomicAdd(&out_4d(b, m, h, w), acc);
     }
+    // }
     #undef out_4d
     #undef in_4d
     #undef mask_4d
