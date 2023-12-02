@@ -2,7 +2,7 @@
 #include <iostream>
 #include "gpu-new-forward.h"
 
-#define TILE_WIDTH 8
+#define TILE_WIDTH 16
 
 #define M_max 16
 #define C_max 6
@@ -62,7 +62,6 @@ __global__ void conv_forward_kernel(float *output, const float *input, const flo
     // int num_of_block_h = ceil(H_out / TILE_WIDTH);
     int b = blockIdx.x;
     int m = blockIdx.y;
-    int c = threadIdx.z;
     int h = (blockIdx.z / num_of_block_w) * TILE_WIDTH + threadIdx.y;
     int w = (blockIdx.z % num_of_block_w) * TILE_WIDTH + threadIdx.x;
     
@@ -70,12 +69,12 @@ __global__ void conv_forward_kernel(float *output, const float *input, const flo
     // for(int b = 0; b < B; b++) {
     if(h < H_out && w < W_out) {
         float acc = 0.0f;
-        // for (int c = 0; c < C; c++) { // sum over all input channels
+        for (int c = 0; c < C; c++) { // sum over all input channels
             for (int p = 0; p < K; p++) // loop over KxK filter
                 for (int q = 0; q < K; q++)
                         acc += in_4d(b, c, h * S + p, w * S + q) * mask_4d(m, c, p, q);
-        // }
-        atomicAdd(&out_4d(b, m, h, w), acc);
+        }
+        out_4d(b, m, h, w) = acc;
     }
     // }
     #undef out_4d
@@ -141,7 +140,7 @@ __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *
     std::cout<<"num of block h "<<num_of_block_h<<std::endl;
 
     // int shared_width = (TILE_WIDTH - 1) * S + K;
-    dim3 dimBlock(TILE_WIDTH, TILE_WIDTH, C);
+    dim3 dimBlock(TILE_WIDTH, TILE_WIDTH, 1);
     dim3 dimGrid(B, M, num_of_block);
     // conv_with_constant_mask<<<dimGrid, dimBlock>>>(device_output, device_input, B, M, C, H, W, K, S);
     conv_forward_kernel<<<dimGrid, dimBlock>>>(device_output, device_input, device_mask, B, M, C, H, W, K, S);

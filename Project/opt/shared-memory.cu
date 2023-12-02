@@ -1,9 +1,9 @@
-//==============shared-constant-memory.cu============
+//==============shared-memory.cu============
 #include <cmath>
 #include <iostream>
 #include "gpu-new-forward.h"
 
-#define TILE_WIDTH 12
+#define TILE_WIDTH 8
 
 #define M_max 16
 #define C_max 6

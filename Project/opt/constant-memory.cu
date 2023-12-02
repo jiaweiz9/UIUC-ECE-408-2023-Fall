@@ -43,12 +43,14 @@ __global__ void conv_with_constant_mask(float *output, const float *input, const
     else
         num_of_block_w = W_out / TILE_WIDTH + 1;
     // int num_of_block_h = ceil(H_out / TILE_WIDTH);
-    int m = blockIdx.x;
-    int h = (blockIdx.y / num_of_block_w) * TILE_WIDTH + threadIdx.y;
-    int w = (blockIdx.y % num_of_block_w) * TILE_WIDTH + threadIdx.x;
+    int b = blockIdx.x;
+    int m = blockIdx.y;
+    // int c = threadIdx.z;
+    int h = (blockIdx.z / num_of_block_w) * TILE_WIDTH + threadIdx.y;
+    int w = (blockIdx.z % num_of_block_w) * TILE_WIDTH + threadIdx.x;
     
     if(h < H_out && w < W_out) {
-        for(int b = 0; b < B; b++) {
+        // for(int b = 0; b < B; b++) {
             float acc = 0.0f;
             for (int c = 0; c < C; c++) { // sum over all input channels
                 for (int p = 0; p < K; p++) // loop over KxK filter
@@ -56,7 +58,7 @@ __global__ void conv_with_constant_mask(float *output, const float *input, const
                             acc += in_4d(b, c, h * S + p, w * S + q) * mask_4d(m, c, p, q);
             }
             out_4d(b, m, h, w) = acc;
-        }
+        // }
     }
     #undef out_4d
     #undef in_4d
@@ -120,7 +122,7 @@ __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *
     std::cout<<"num of block w "<<num_of_block_w<<std::endl;
     std::cout<<"num of block h "<<num_of_block_h<<std::endl;
     dim3 dimBlock(TILE_WIDTH, TILE_WIDTH, 1);
-    dim3 dimGrid(M, num_of_block, 1);
+    dim3 dimGrid(B, M, num_of_block);
     // conv_with_constant_mask<<<dimGrid, dimBlock>>>(device_output, device_input, B, M, C, H, W, K, S);
     conv_with_constant_mask<<<dimGrid, dimBlock>>>(device_output, device_input, B, M, C, H, W, K, S);
     cudaError_t error = cudaGetLastError();

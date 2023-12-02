@@ -1,5 +1,3 @@
-// ======== Fatest implementation: Constant Memory and Restrict and Loop-unrolling =====
-// ======================================================================================
 #include <cmath>
 #include <iostream>
 #include "gpu-new-forward.h"
