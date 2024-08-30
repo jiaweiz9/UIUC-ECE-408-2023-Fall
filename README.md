@@ -1,3 +1,5 @@
+WARN: This repo is only for my personal reference. I am not responsible for any plagiarism.
+
 # UIUC-ECE-408-2023-Fall
 This is the machine problems and final project repository for my own. I am not responsible for any possible plagiarism or academic integrety. Follows are the original README.md in the course's MPs repository.
 
